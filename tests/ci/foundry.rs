@@ -1,7 +1,9 @@
+use std::io;
 use std::{
     env,
     fs::{
         self,
+        create_dir_all,
         remove_dir_all,
         remove_file,
     },
@@ -34,6 +36,7 @@ fn soldeer_install_valid_dependency() {
     let command = Subcommands::Install(Install {
         dependency: Some("forge-std~1.8.2".to_string()),
         remote_url: None,
+        rev: None,
     });
 
     match soldeer::run(command) {
@@ -44,10 +47,10 @@ fn soldeer_install_valid_dependency() {
     }
 
     let path_dependency = DEPENDENCY_DIR.join("forge-std-1.8.2");
-    assert!(Path::new(&path_dependency).exists());
+    assert!(path_dependency.exists());
     let test_contract = r#"
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.20;
+pragma solidity >=  0.8.20;
 
 contract Increment {
     uint256 i;
@@ -60,10 +63,11 @@ contract Increment {
 
     let test = r#"
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.20;
+pragma solidity >= 0.8.20;
 import "../src/Increment.sol";
+import "@forge-std-1.8.2/src/Test.sol";
 
-contract Test {
+contract TestSoldeer is Test {
     Increment t = new Increment();
 
     function testIncrement() external {
@@ -95,13 +99,41 @@ contract Test {
         assert_eq!("Invalid state", "");
     }
 
+    let _ = create_dir_all(test_project.join("dependencies").join("forge-std-1.8.2"));
+
+    let _ = copy_dir_all(
+        env::current_dir()
+            .unwrap()
+            .join("dependencies")
+            .join("forge-std-1.8.2"),
+        test_project.join("dependencies").join("forge-std-1.8.2"),
+    );
+
+    let _ = fs::copy(
+        env::current_dir().unwrap().join("foundry.toml"),
+        test_project.join("foundry.toml"),
+    );
+
+    let _ = fs::copy(
+        env::current_dir().unwrap().join("remappings.txt"),
+        test_project.join("remappings.txt"),
+    );
+
     let output = Command::new("forge")
         .arg("test")
         .arg("--root")
         .arg(&test_project)
         .output()
         .expect("failed to execute process");
-    assert!(String::from_utf8(output.stdout).unwrap().contains("[PASS]"));
+
+    let passed = String::from_utf8(output.stdout).unwrap().contains("[PASS]");
+    if !passed {
+        println!(
+            "This will fail with: {:?}",
+            String::from_utf8(output.stderr).unwrap()
+        );
+    }
+    assert!(passed);
     clean_test_env(&test_project);
 }
 
@@ -111,6 +143,7 @@ fn soldeer_install_invalid_dependency() {
     let command = Subcommands::Install(Install {
         dependency: Some("forge-std".to_string()),
         remote_url: None,
+        rev: None,
     });
 
     match soldeer::run(command) {
@@ -130,12 +163,26 @@ fn soldeer_install_invalid_dependency() {
     let path_dependency = DEPENDENCY_DIR.join("forge-std");
     let path_zip = DEPENDENCY_DIR.join("forge-std.zip");
 
-    assert!(!Path::new(&path_zip).exists());
-    assert!(!Path::new(&path_dependency).exists());
+    assert!(!path_zip.exists());
+    assert!(!path_dependency.exists());
 }
 
 fn clean_test_env(test_project: &PathBuf) {
     let _ = remove_dir_all(DEPENDENCY_DIR.clone());
     let _ = remove_file(LOCK_FILE.clone());
     let _ = remove_dir_all(test_project);
+}
+
+fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io::Result<()> {
+    fs::create_dir_all(&dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        } else {
+            fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }

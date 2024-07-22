@@ -40,6 +40,7 @@ pub struct Dependency {
     pub name: String,
     pub version: String,
     pub url: String,
+    pub hash: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -73,6 +74,7 @@ pub async fn read_config(filename: String) -> Result<Vec<Dependency>, ConfigErro
         #[allow(clippy::needless_late_init)]
         let url;
         let version;
+        let mut rev = String::new();
 
         // checks if the format is dependency = {version = "1.1.1" }
         if v.get("version").is_some() {
@@ -91,6 +93,11 @@ pub async fn read_config(filename: String) -> Result<Vec<Dependency>, ConfigErro
         if v.get("url").is_some() {
             // clear any string quotes added by mistake
             url = v["url"].to_string().replace('\"', "");
+        } else if v.get("git").is_some() {
+            url = v["git"].to_string().replace('\"', "");
+            if v.get("rev").is_some() {
+                rev = v["rev"].to_string().replace('\"', "");
+            }
         } else {
             // we don't have a specified url, means we will rely on the remote server to give it to us
             url = match get_dependency_url_remote(name, &version).await {
@@ -107,6 +114,7 @@ pub async fn read_config(filename: String) -> Result<Vec<Dependency>, ConfigErro
             name: name.to_string(),
             version,
             url,
+            hash: rev,
         });
     }
 
@@ -124,12 +132,7 @@ pub fn define_config_file() -> Result<String, ConfigError> {
 
     // check if the foundry.toml has the dependencies defined, if so then we setup the foundry.toml as the config file
     if fs::metadata(&filename).is_ok() {
-        let contents = read_file_to_string(&filename.clone());
-        let doc: DocumentMut = contents.parse::<DocumentMut>().expect("invalid doc");
-
-        if doc.get("dependencies").is_some() {
-            return Ok(filename);
-        }
+        return Ok(filename);
     }
 
     filename = String::from(SOLDEER_CONFIG_FILE.to_str().unwrap());
@@ -156,17 +159,16 @@ pub fn define_config_file() -> Result<String, ConfigError> {
 }
 
 pub fn add_to_config(
-    dependency_name: &str,
-    dependency_version: &str,
-    dependency_url: &str,
+    dependency: &Dependency,
     custom_url: bool,
     config_file: &str,
+    via_git: bool,
 ) -> Result<(), ConfigError> {
     println!(
         "{}",
         Paint::green(&format!(
             "Adding dependency {}-{} to the config file",
-            dependency_name, dependency_version
+            dependency.name, dependency.version
         ))
     );
 
@@ -191,21 +193,25 @@ pub fn add_to_config(
 
     new_dependencies.push_str(&format!(
         "  \"{}~{}\" = \"{}\"\n",
-        dependency_name, dependency_version, dependency_url
+        dependency.name, dependency.version, dependency.url
     ));
 
     let mut new_item: Item = Item::None;
-    if custom_url {
-        new_item["version"] = value(dependency_version);
-        new_item["url"] = value(dependency_url);
+    if custom_url && !via_git {
+        new_item["version"] = value(dependency.version.clone());
+        new_item["url"] = value(dependency.url.clone());
+    } else if via_git {
+        new_item["version"] = value(dependency.version.clone());
+        new_item["git"] = value(dependency.url.clone());
+        new_item["rev"] = value(dependency.hash.clone());
     } else {
-        new_item = value(dependency_version)
+        new_item = value(dependency.version.clone())
     }
 
     doc["dependencies"]
         .as_table_mut()
         .unwrap()
-        .insert(dependency_name.to_string().as_str(), new_item);
+        .insert(dependency.name.to_string().as_str(), new_item);
     let mut file: std::fs::File = fs::OpenOptions::new()
         .write(true)
         .append(false)
@@ -448,7 +454,8 @@ libs = ["dependencies"]
             Dependency {
                 name: "@gearbox-protocol-periphery-v3".to_string(),
                 version: "1.6.1".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
 
@@ -457,7 +464,8 @@ libs = ["dependencies"]
             Dependency {
                 name: "@openzeppelin-contracts".to_string(),
                 version: "5.0.2".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
         let _ = remove_file(target_config);
@@ -510,7 +518,8 @@ libs = ["dependencies"]
             Dependency {
                 name: "@gearbox-protocol-periphery-v3".to_string(),
                 version: "1.6.1".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
 
@@ -519,7 +528,8 @@ libs = ["dependencies"]
             Dependency {
                 name: "@openzeppelin-contracts".to_string(),
                 version: "5.0.2".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
         let _ = remove_file(target_config);
@@ -570,7 +580,8 @@ enabled = true
             Dependency {
                 name: "@gearbox-protocol-periphery-v3".to_string(),
                 version: "1.6.1".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
 
@@ -579,7 +590,8 @@ enabled = true
             Dependency {
                 name: "@openzeppelin-contracts".to_string(),
                 version: "5.0.2".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
         let _ = remove_file(target_config);
@@ -630,7 +642,8 @@ enabled = true
             Dependency {
                 name: "@gearbox-protocol-periphery-v3".to_string(),
                 version: "1.6.1".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
 
@@ -639,7 +652,8 @@ enabled = true
             Dependency {
                 name: "@openzeppelin-contracts".to_string(),
                 version: "5.0.2".to_string(),
-                url: "https://example_url.com/example_url.zip".to_string()
+                url: "https://example_url.com/example_url.zip".to_string(),
+                hash: String::new()
             }
         );
         let _ = remove_file(target_config);
@@ -860,15 +874,13 @@ libs = ["dependencies"]
         let target_config = define_config(true);
 
         write_to_config(&target_config, content);
-
-        add_to_config(
-            "dep1",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            false,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+        add_to_config(&dependency, false, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 # Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
@@ -911,14 +923,14 @@ libs = ["dependencies"]
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "dep1",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            true,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 # Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
@@ -962,14 +974,14 @@ old_dep = "5.1.0-my-version-is-cool"
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "dep1",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            false,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, false, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 # Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
@@ -1014,14 +1026,14 @@ old_dep = { version = "5.1.0-my-version-is-cool", url = "http://custom_url.com/c
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "dep1",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            true,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 # Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
@@ -1066,14 +1078,14 @@ old_dep = { version = "5.1.0-my-version-is-cool", url = "http://custom_url.com/c
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "old_dep",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            true,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "old_dep".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 # Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
@@ -1117,14 +1129,14 @@ old_dep = { version = "5.1.0-my-version-is-cool", url = "http://custom_url.com/c
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "old_dep",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            false,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "old_dep".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, false, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 # Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
 
@@ -1149,6 +1161,60 @@ old_dep = "1.0.0"
     }
 
     #[test]
+    fn add_to_config_foundry_not_altering_the_existing_contents() -> Result<(), ConfigError> {
+        let mut content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+"#;
+
+        let target_config = define_config(true);
+
+        write_to_config(&target_config, content);
+
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, false, target_config.to_str().unwrap(), false).unwrap();
+        content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+
+[dependencies]
+dep1 = "1.0.0"
+"#;
+
+        assert_eq!(
+            read_file_to_string(&String::from(target_config.to_str().unwrap())),
+            content
+        );
+
+        let _ = remove_file(target_config);
+        Ok(())
+    }
+
+    #[test]
     fn add_to_config_soldeer_no_custom_url_first_dependency() -> Result<(), ConfigError> {
         let mut content = r#"
 [remappings]
@@ -1161,14 +1227,14 @@ enabled = true
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "dep1",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            false,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, false, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 [remappings]
 enabled = true
@@ -1199,17 +1265,186 @@ enabled = true
 
         write_to_config(&target_config, content);
 
-        add_to_config(
-            "dep1",
-            "1.0.0",
-            "http://custom_url.com/custom.zip",
-            true,
-            target_config.to_str().unwrap(),
-        )
-        .unwrap();
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), false).unwrap();
         content = r#"
 [remappings]
 enabled = true
+
+[dependencies]
+dep1 = { version = "1.0.0", url = "http://custom_url.com/custom.zip" }
+"#;
+
+        assert_eq!(
+            read_file_to_string(&String::from(target_config.to_str().unwrap())),
+            content
+        );
+
+        let _ = remove_file(target_config);
+        Ok(())
+    }
+
+    #[test]
+    fn add_to_config_foundry_github_with_commit() -> Result<(), ConfigError> {
+        let mut content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+"#;
+
+        let target_config = define_config(true);
+
+        write_to_config(&target_config, content);
+
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "git@github.com:foundry-rs/forge-std.git".to_string(),
+            hash: "07263d193d621c4b2b0ce8b4d54af58f6957d97d".to_string(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), true).unwrap();
+        content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+
+[dependencies]
+dep1 = { version = "1.0.0", git = "git@github.com:foundry-rs/forge-std.git", rev = "07263d193d621c4b2b0ce8b4d54af58f6957d97d" }
+"#;
+
+        assert_eq!(
+            read_file_to_string(&String::from(target_config.to_str().unwrap())),
+            content
+        );
+
+        let _ = remove_file(target_config);
+        Ok(())
+    }
+
+    #[test]
+    fn add_to_config_foundry_github_previous_no_commit_then_with_commit() -> Result<(), ConfigError>
+    {
+        let mut content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+
+[dependencies]
+dep1 = { version = "1.0.0", git = "git@github.com:foundry-rs/forge-std.git" }
+"#;
+
+        let target_config = define_config(true);
+
+        write_to_config(&target_config, content);
+
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "git@github.com:foundry-rs/forge-std.git".to_string(),
+            hash: "07263d193d621c4b2b0ce8b4d54af58f6957d97d".to_string(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), true).unwrap();
+        content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+
+[dependencies]
+dep1 = { version = "1.0.0", git = "git@github.com:foundry-rs/forge-std.git", rev = "07263d193d621c4b2b0ce8b4d54af58f6957d97d" }
+"#;
+
+        assert_eq!(
+            read_file_to_string(&String::from(target_config.to_str().unwrap())),
+            content
+        );
+
+        let _ = remove_file(target_config);
+        Ok(())
+    }
+
+    #[test]
+    fn add_to_config_foundry_github_previous_commit_then_no_commit() -> Result<(), ConfigError> {
+        let mut content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
+
+[dependencies]
+dep1 = { version = "1.0.0", git = "git@github.com:foundry-rs/forge-std.git", rev = "07263d193d621c4b2b0ce8b4d54af58f6957d97d" }
+"#;
+
+        let target_config = define_config(true);
+
+        write_to_config(&target_config, content);
+
+        let dependency = Dependency {
+            name: "dep1".to_string(),
+            version: "1.0.0".to_string(),
+            url: "http://custom_url.com/custom.zip".to_string(),
+            hash: String::new(),
+        };
+
+        add_to_config(&dependency, true, target_config.to_str().unwrap(), false).unwrap();
+        content = r#"
+# Full reference https://github.com/foundry-rs/foundry/tree/master/crates/config
+
+[profile.default]
+script = "script"
+solc = "0.8.26"
+src = "src"
+test = "test"
+libs = ["dependencies"]
+gas_reports = ['*']
+
+# we don't have [dependencies] declared
 
 [dependencies]
 dep1 = { version = "1.0.0", url = "http://custom_url.com/custom.zip" }

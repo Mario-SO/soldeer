@@ -111,6 +111,7 @@ fn zip_file(
     files_to_copy: &Vec<FilePair>,
     file_name: &String,
 ) -> Result<PathBuf, PushError> {
+    let root_dir_as_string = root_directory_path.to_str().unwrap();
     let zip_file_path = root_directory_path.join(file_name.to_owned() + ".zip");
     let file = File::create(zip_file_path.to_str().unwrap()).unwrap();
     let mut zip = ZipWriter::new(file);
@@ -124,15 +125,19 @@ fn zip_file(
     }
 
     for file_path in files_to_copy {
-        let file = File::open(file_path.path.clone()).unwrap();
-        let file_name = file_path.name.clone();
+        let file_to_copy = File::open(file_path.path.clone()).unwrap();
+        let file_to_copy_name = file_path.name.clone();
         let path = Path::new(&file_path.path);
         let mut buffer = Vec::new();
+
+        // This is the relative path, we basically get the relative path to the target folder that we want to push
+        // and zip that as a name so we won't screw up the file/dir hierarchy in the zip file.
+        let relative_file_path = file_path.path.to_string().replace(root_dir_as_string, "");
 
         // Write file or directory explicitly
         // Some unzip tools unzip files with directory paths correctly, some do not!
         if path.is_file() {
-            match zip.start_file(file_name.as_str(), options) {
+            match zip.start_file(relative_file_path, options) {
                 Ok(_) => {}
                 Err(err) => {
                     return Err(PushError {
@@ -142,7 +147,7 @@ fn zip_file(
                     });
                 }
             }
-            match io::copy(&mut file.take(u64::MAX), &mut buffer) {
+            match io::copy(&mut file_to_copy.take(u64::MAX), &mut buffer) {
                 Ok(_) => {}
                 Err(err) => {
                     return Err(PushError {
@@ -150,7 +155,7 @@ fn zip_file(
                         version: dependency_version.to_string(),
                         cause: format!(
                             "Zipping failed, could not read file {} because of the error {}",
-                            file_name, err
+                            file_to_copy_name, err
                         ),
                     });
                 }
@@ -166,7 +171,7 @@ fn zip_file(
                 }
             }
         } else if !path.as_os_str().is_empty() {
-            let _ = zip.add_directory(&file_name, options);
+            let _ = zip.add_directory(&file_path.path, options);
         }
     }
     let _ = zip.finish();
@@ -363,6 +368,7 @@ mod tests {
         remove_file,
     };
 
+    use io::Cursor;
     use serial_test::serial;
 
     use super::*;
@@ -567,6 +573,81 @@ mod tests {
 
         let _ = remove_file(gitignore);
         let _ = remove_dir_all(target_dir);
+    }
+
+    #[test]
+    #[serial]
+    fn zipping_file_structure_check() {
+        let target_dir = get_current_working_dir().join("test").join("test_zip");
+        let target_dir_unzip = get_current_working_dir().join("test").join("test_unzip");
+        let _ = remove_dir_all(&target_dir);
+        let _ = remove_dir_all(&target_dir_unzip);
+        let _ = create_dir_all(&target_dir);
+        let _ = create_dir_all(&target_dir_unzip);
+
+        // File structure that should be preserved
+        // - target_dir/
+        // --- random_dir_1/
+        // --- --- random_dir_2/
+        // --- --- --- random_file_3.txt
+        // --- --- random_file_2.txt
+        // --- random_file_1.txt
+        let random_dir_1 = create_random_directory(&target_dir, "".to_string());
+        let random_dir_2 = create_random_directory(Path::new(&random_dir_1), "".to_string());
+        let random_file_1 = create_random_file(&target_dir, ".txt".to_string());
+        let random_file_2 = create_random_file(Path::new(&random_dir_1), ".txt".to_string());
+        let random_file_3 = create_random_file(Path::new(&random_dir_2), ".txt".to_string());
+
+        let dep_name = "test_dep".to_string();
+        let dep_version = "1.1".to_string();
+        let files_to_copy: Vec<FilePair> = vec![
+            FilePair {
+                name: "random_file_1".to_string(),
+                path: random_file_1.clone(),
+            },
+            FilePair {
+                name: "random_file_1".to_string(),
+                path: random_file_3.clone(),
+            },
+            FilePair {
+                name: "random_file_1".to_string(),
+                path: random_file_2.clone(),
+            },
+        ];
+        let result = match zip_file(
+            &dep_name,
+            &dep_version,
+            &target_dir,
+            &files_to_copy,
+            &"test_zip".to_string(),
+        ) {
+            Ok(r) => r,
+            Err(_) => {
+                assert_eq!("Invalid State", "");
+                return;
+            }
+        };
+
+        // unzipping for checks
+        let archive = read_file(result).unwrap();
+        match zip_extract::extract(Cursor::new(archive), &target_dir_unzip, true) {
+            Ok(_) => {}
+            Err(_) => {
+                assert_eq!("Invalid State", "");
+            }
+        }
+
+        let random_file_1_unzipped = random_file_1.replace("test_zip", "test_unzip");
+        let random_file_2_unzipped = random_file_2.replace("test_zip", "test_unzip");
+        let random_file_3_unzipped = random_file_3.replace("test_zip", "test_unzip");
+
+        assert!(Path::new(&random_file_1_unzipped).exists());
+        assert!(Path::new(&random_file_2_unzipped).exists());
+        assert!(Path::new(&random_file_3_unzipped).exists());
+
+        //cleaning up
+        let _ = remove_dir_all(&target_dir);
+        let _ = remove_dir_all(&target_dir_unzip);
     }
 
     fn define_ignore_file(git: bool) -> PathBuf {
